@@ -12,6 +12,7 @@ export default {
       declaration: false,
       strict: true,
       esModuleInterop: true,
+      exclude: ['test/**', 'benchmark/**'],
     }),
   ],
   output: {

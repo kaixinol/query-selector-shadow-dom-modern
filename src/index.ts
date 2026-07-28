@@ -26,7 +26,7 @@ function* walkRoots(root: QueryableNode): Generator<QueryableNode, void, unknown
     }
 }
 
-function splitByComma(selector: string): string[] {
+export function splitByComma(selector: string): string[] {
     const parts: string[] = [];
     let current = '';
     let inQuotes = false, quoteChar = '';
@@ -58,7 +58,7 @@ function splitByComma(selector: string): string[] {
     return parts.filter(Boolean);
 }
 
-function tokenizePath(selector: string): string[] {
+export function tokenizePath(selector: string): string[] {
     const tokens: string[] = [];
     let current = '';
     let inQuotes = false, quoteChar = '';
