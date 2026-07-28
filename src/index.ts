@@ -174,8 +174,14 @@ export function querySelectorAllDeep<T extends Element = HTMLElement>(
         const rightMostToken = tokens[tokens.length - 1];
 
         for (const currentRoot of walkRoots(root)) {
+            if (currentRoot === root) {
+                const lightResults = root.querySelectorAll<T>(sel);
+                for (let i = 0; i < lightResults.length; i++) {
+                    results.add(lightResults[i]);
+                }
+                continue;
+            }
             const candidates = currentRoot.querySelectorAll(rightMostToken);
-
             for (let i = 0; i < candidates.length; i++) {
                 const candidate = candidates[i] as T;
                 if (tokens.length === 1 || matchPath(candidate, tokens, root)) {
@@ -192,6 +198,9 @@ export function querySelectorDeep<T extends Element = HTMLElement>(
     root: QueryableNode = document,
     _allElements: Element[] | null = null
 ): T | null {
+    const light = root.querySelector<T>(selector);
+    if (light) return light;
+
     const commaSelectors = splitByComma(selector);
 
     for (const sel of commaSelectors) {
@@ -199,6 +208,7 @@ export function querySelectorDeep<T extends Element = HTMLElement>(
         const rightMostToken = tokens[tokens.length - 1];
 
         for (const currentRoot of walkRoots(root)) {
+            if (currentRoot === root) continue;
             const candidates = currentRoot.querySelectorAll(rightMostToken);
 
             for (let i = 0; i < candidates.length; i++) {
