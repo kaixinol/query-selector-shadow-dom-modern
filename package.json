@@ -24,6 +24,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "benchmark": "tsx benchmark/runner.ts",
+    "verify": "tsx benchmark/verify.ts",
     "prepublishOnly": "pnpm build"
   },
   "keywords": [
@@ -39,7 +40,9 @@
   "license": "MIT",
   "devDependencies": {
     "@rollup/plugin-typescript": "^12.1.2",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^26.1.1",
+    "jsdom": "^30.0.1",
     "playwright": "^1.62.0",
     "query-selector-shadow-dom": "^1.0.1",
     "rollup": "^4.34.8",

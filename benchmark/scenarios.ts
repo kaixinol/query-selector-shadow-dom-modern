@@ -9,144 +9,176 @@ export interface Scenario {
 
 export const SCENARIOS: Scenario[] = [
   {
-    name: 'Light DOM (no shadow)',
+    name: 'Real-world Design System Layout (Mixed Shadow & Light DOM)',
     setup: `
       window.__uid = Math.random().toString(36).slice(2, 8);
-      for (let i = 0; i < 500; i++) {
-        const div = document.createElement('div');
-        div.className = 'item-' + window.__uid;
-        div.textContent = 'item-' + i;
-        document.body.appendChild(div);
+      // 模拟现代化应用骨架：App Shell -> Layout -> Sidebar/Main -> Card Widgets
+      for (let i = 0; i < 40; i++) {
+        const shell = document.createElement('app-shell');
+        const shellRoot = shell.attachShadow({ mode: 'open' });
+
+        const contentPane = document.createElement('content-pane');
+        const paneRoot = contentPane.attachShadow({ mode: 'open' });
+
+        const card = document.createElement('ds-card');
+        card.setAttribute('data-index', i);
+        const cardRoot = card.attachShadow({ mode: 'open' });
+
+        cardRoot.innerHTML = \`
+          <div class="card-header \${i === 25 ? 'target-' + window.__uid : ''}">
+            <span class="title">Widget \${i}</span>
+          </div>
+          <div class="card-body">
+            <slot></slot>
+          </div>
+        \`;
+
+        // 混合 Light DOM 子节点投影到 Slot
+        if (i === 25) {
+          const slotted = document.createElement('div');
+          slotted.className = 'deep-target-' + window.__uid;
+          slotted.textContent = 'Target Content';
+          card.appendChild(slotted);
+        }
+
+        paneRoot.appendChild(card);
+        shellRoot.appendChild(contentPane);
+        document.body.appendChild(shell);
       }
-      const target = document.createElement('div');
-      target.id = 'target-' + window.__uid;
-      document.body.appendChild(target);
     `,
     selectors: [
-      { label: '.class', resolve: '".item-" + uid', type: 'query' },
+      { label: 'Deep mixed shadow & slot selector', resolve: '"ds-card .deep-target-" + uid', type: 'query' },
     ],
-    iterations: 200,
+    iterations: 100,
   },
   {
-    name: 'Single shadow root',
+    name: 'Deeply Nested Component Tree (7 Levels)',
     setup: `
       window.__uid = Math.random().toString(36).slice(2, 8);
-      for (let i = 0; i < 100; i++) {
-        const host = document.createElement('my-el');
+      function createDeepTree(depth) {
+        const host = document.createElement('level-' + depth);
         const root = host.attachShadow({ mode: 'open' });
-        root.innerHTML = '<div class="item-' + window.__uid + '"><span class="nested-' + window.__uid + '">nested</span></div>';
-        document.body.appendChild(host);
-      }
-    `,
-    selectors: [
-      { label: '.class in shadow', resolve: '".item-" + uid', type: 'query' },
-    ],
-    iterations: 200,
-  },
-  {
-    name: 'Deeply nested shadow (4 levels)',
-    setup: `
-      window.__uid = Math.random().toString(36).slice(2, 8);
-      function createNested(level) {
-        const host = document.createElement('level-' + level);
-        const root = host.attachShadow({ mode: 'open' });
-        if (level === 0) {
-          root.innerHTML = '<div class="deep-' + window.__uid + '">target</div>';
+        if (depth === 0) {
+          root.innerHTML = \`<div class="leaf-node-\${window.__uid}" data-active="true">Found Me</div>\`;
         } else {
-          const child = createNested(level - 1);
-          root.appendChild(child);
+          const wrapper = document.createElement('div');
+          wrapper.className = 'wrapper-tier';
+          wrapper.appendChild(createDeepTree(depth - 1));
+          root.appendChild(wrapper);
         }
         return host;
       }
-      for (let i = 0; i < 30; i++) {
-        document.body.appendChild(createNested(3));
+      for (let i = 0; i < 15; i++) {
+        document.body.appendChild(createDeepTree(6));
       }
     `,
     selectors: [
-      { label: '.deep 4 levels', resolve: '".deep-" + uid', type: 'query' },
+      { label: '7-level deep nested selector', resolve: '".leaf-node-" + uid', type: 'query' },
     ],
-    iterations: 200,
+    iterations: 100,
   },
   {
-    name: '20 parallel shadow roots',
+    name: 'High-Density Dashboard (100 Parallel Shadow Roots)',
     setup: `
       window.__uid = Math.random().toString(36).slice(2, 8);
-      for (let i = 0; i < 20; i++) {
-        const host = document.createElement('par-el');
-        const root = host.attachShadow({ mode: 'open' });
-        for (let j = 0; j < 20; j++) {
-          const div = document.createElement('div');
-          div.className = 'par-item-' + window.__uid;
-          root.appendChild(div);
+      for (let i = 0; i < 100; i++) {
+        const widget = document.createElement('metric-widget');
+        const root = widget.attachShadow({ mode: 'open' });
+        let innerHtml = '<div class="metric-container">';
+        for (let j = 0; j < 15; j++) {
+          const isTarget = (i === 75 && j === 10);
+          innerHtml += \`<div class="metric-item \${isTarget ? 'target-' + window.__uid : ''}">metric-\${j}</div>\`;
         }
-        document.body.appendChild(host);
+        innerHtml += '</div>';
+        root.innerHTML = innerHtml;
+        document.body.appendChild(widget);
       }
     `,
     selectors: [
-      { label: '.class in 20 roots', resolve: '".par-item-" + uid', type: 'query' },
+      { label: '.class in 100 heavy roots', resolve: '".target-" + uid', type: 'query' },
     ],
-    iterations: 200,
+    iterations: 100,
   },
   {
-    name: 'Complex combinator across shadow',
+    name: 'Complex Multi-Boundary Combinators & Attributes',
     setup: `
       window.__uid = Math.random().toString(36).slice(2, 8);
-      for (let i = 0; i < 50; i++) {
-        const outer = document.createElement('outer-el');
+      for (let i = 0; i < 30; i++) {
+        const outer = document.createElement('complex-layout');
         const outerRoot = outer.attachShadow({ mode: 'open' });
-        const innerHost = document.createElement('inner-el');
-        const innerRoot = innerHost.attachShadow({ mode: 'open' });
-        innerRoot.innerHTML = '<div class="leaf-' + window.__uid + '">leaf</div>';
-        outerRoot.innerHTML = '<div class="middle-' + window.__uid + '"></div>';
-        outerRoot.querySelector('.middle-' + window.__uid).appendChild(innerHost);
+
+        const inner = document.createElement('data-grid');
+        const innerRoot = inner.attachShadow({ mode: 'open' });
+
+        innerRoot.innerHTML = \`
+          <div class="row-wrapper">
+            <span class="cell target-cell-\${window.__uid}" data-status="active">Target</span>
+          </div>
+        \`;
+
+        outerRoot.innerHTML = \`
+          <header class="layout-header"></header>
+          <div class="layout-body"></div>
+        \`;
+        outerRoot.querySelector('.layout-body').appendChild(inner);
         document.body.appendChild(outer);
       }
     `,
     selectors: [
-      { label: 'outer > middle leaf', resolve: '"outer-el > .middle-" + uid + " .leaf-" + uid', type: 'query' },
+      { label: 'complex shadow combinator + attr', resolve: '"complex-layout > .layout-body data-grid .target-cell-" + uid + "[data-status=\\"active\\"]"', type: 'query' },
     ],
     iterations: 100,
   },
   {
-    name: 'collectAllElementsDeep',
+    name: 'Heavy-Scale collectAllElementsDeep with Filtering',
     setup: `
       window.__uid = Math.random().toString(36).slice(2, 8);
-      for (let i = 0; i < 20; i++) {
-        const host = document.createElement('col-el');
-        const root = host.attachShadow({ mode: 'open' });
-        for (let j = 0; j < 10; j++) {
-          root.innerHTML += '<div class="col-' + window.__uid + '"><span>x</span></div>';
+      for (let i = 0; i < 50; i++) {
+        const container = document.createElement('virtual-list');
+        const root = container.attachShadow({ mode: 'open' });
+        let html = '';
+        for (let j = 0; j < 20; j++) {
+          const matchType = j % 2 === 0 ? 'item-match-' + window.__uid : 'item-other';
+          html += \`<div class="\${matchType}" data-id="\${j}"><span>Content \${j}</span></div>\`;
         }
-        document.body.appendChild(host);
+        root.innerHTML = html;
+        document.body.appendChild(container);
       }
     `,
     selectors: [
-      { label: 'collectAllDeep no filter', resolve: 'null', type: 'collectAll' },
-      { label: 'collectAllDeep with filter', resolve: '"div"', type: 'collectAll' },
+      { label: 'collectAllDeep massive unfiltered', resolve: 'null', type: 'collectAll' },
+      { label: 'collectAllDeep massive filtered', resolve: '".item-match-" + uid', type: 'collectAll' },
     ],
-    iterations: 100,
+    iterations: 50,
   },
   {
-    name: 'Comma-separated selectors',
+    name: 'Complex Comma-Separated Multi-Target Cross-Boundary',
     setup: `
       window.__uid = Math.random().toString(36).slice(2, 8);
-      function createWithId(tag, id) {
-        const el = document.createElement(tag || 'div');
-        if (id) el.id = id + '-' + window.__uid;
-        document.body.appendChild(el);
-        if (el.attachShadow) {
-          const root = el.attachShadow({ mode: 'open' });
-          root.innerHTML = '<span class="comma-' + window.__uid + '">in shadow</span>';
-        }
-        return el;
-      }
-      createWithId('div', 'a');
-      const b = createWithId('my-com', 'b');
-      const c = createWithId('div', 'c');
+
+      // Light DOM anchor
+      const lightEl = document.createElement('div');
+      lightEl.id = 'light-anchor-' + window.__uid;
+      document.body.appendChild(lightEl);
+
+      // Shadow component A
+      const compA = document.createElement('panel-a');
+      const rootA = compA.attachShadow({ mode: 'open' });
+      rootA.innerHTML = \`<div class="item-a-\${window.__uid}">shadow A</div>\`;
+      document.body.appendChild(compA);
+
+      // Shadow component B (Nested)
+      const compB = document.createElement('panel-b');
+      const rootB = compB.attachShadow({ mode: 'open' });
+      const subB = document.createElement('sub-b');
+      const subRootB = subB.attachShadow({ mode: 'open' });
+      subRootB.innerHTML = \`<div class="item-b-\${window.__uid}">shadow B nested</div>\`;
+      rootB.appendChild(subB);
+      document.body.appendChild(compB);
     `,
     selectors: [
-      { label: 'comma separated', resolve: '"#a-" + uid + ", #b-" + uid + ", #c-" + uid', type: 'query' },
+      { label: 'comma separated multi-boundary', resolve: '"#light-anchor-" + uid + ", .item-a-" + uid + ", .item-b-" + uid', type: 'query' },
     ],
-    iterations: 200,
+    iterations: 150,
   },
 ];
