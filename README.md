@@ -35,10 +35,11 @@ const filtered = collectAllElementsDeep('a[href]');
 ### UMD (browser)
 
 ```html
-<!-- Full build (debuggable, with sourcemap) -->
-<script src="node_modules/query-selector-shadow-dom-modern/dist/umd/index.js"></script>
-<!-- Or minified (~1.9 KB gzipped) -->
-<script src="node_modules/query-selector-shadow-dom-modern/dist/umd/index.min.js"></script>
+<!-- Via CDN, minified (~1.9 KB gzipped) -->
+<script src="https://cdn.jsdelivr.net/npm/query-selector-shadow-dom-modern/dist/umd/index.min.js"></script>
+<!-- Or unpkg -->
+<script src="https://unpkg.com/query-selector-shadow-dom-modern/dist/umd/index.min.js"></script>
+<!-- Debuggable full build (with sourcemap): use dist/umd/index.js instead of index.min.js -->
 <script>
   const btn = querySelectorShadowDom.querySelectorDeep('.btn-in-shadow-dom');
 </script>
