@@ -1,5 +1,7 @@
 # query-selector-shadow-dom-modern
 
+[![Release](https://github.com/kaixinol/query-selector-shadow-dom-modern/actions/workflows/release.yml/badge.svg)](https://github.com/kaixinol/query-selector-shadow-dom-modern/actions/workflows/release.yml)
+
 Modern drop-in replacement for [query-selector-shadow-dom](https://www.npmjs.com/package/query-selector-shadow-dom). Zero dependencies, full TypeScript support.
 
 querySelector that can pierce Shadow DOM roots without knowing the path through nested shadow roots. Useful for automated testing of Web Components (Selenium, Puppeteer, Playwright, etc.).
