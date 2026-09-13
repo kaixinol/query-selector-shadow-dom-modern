@@ -1,16 +1,16 @@
 {
   "name": "query-selector-shadow-dom-modern",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Modern drop-in replacement for query-selector-shadow-dom — querySelector that pierces Shadow DOM roots without knowing the path",
   "type": "module",
-  "main": "dist/umd/index.js",
+  "main": "dist/umd/index.cjs",
   "module": "dist/esm/index.js",
   "types": "dist/esm/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/esm/index.d.ts",
       "import": "./dist/esm/index.js",
-      "require": "./dist/umd/index.js"
+      "require": "./dist/umd/index.cjs"
     }
   },
   "files": [
@@ -20,7 +20,8 @@
   "scripts": {
     "build:esm": "tsc -p tsconfig.json",
     "build:umd": "rollup -c",
-    "build": "pnpm build:esm && pnpm build:umd",
+    "build:min": "esbuild dist/umd/index.js --minify --sourcemap --outfile=dist/umd/index.min.js",
+    "build": "pnpm build:esm && pnpm build:umd && pnpm build:min",
     "test": "vitest run",
     "test:watch": "vitest",
     "benchmark": "tsx benchmark/runner.ts",
@@ -42,13 +43,14 @@
     "@rollup/plugin-typescript": "^12.1.2",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^26.1.1",
+    "esbuild": "^0.28.2",
     "jsdom": "^30.0.1",
     "playwright": "^1.62.0",
     "query-selector-shadow-dom": "^1.0.1",
     "rollup": "^4.34.8",
     "tslib": "^2.8.1",
     "tsx": "^4.23.1",
-    "typescript": "^5.7.3",
-    "vitest": "^3.2.7"
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.0"
   }
 }
