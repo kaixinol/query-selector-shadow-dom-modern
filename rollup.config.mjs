@@ -15,10 +15,20 @@ export default {
       exclude: ['test/**', 'benchmark/**'],
     }),
   ],
-  output: {
-    format: 'umd',
-    name: 'querySelectorShadowDom',
-    file: 'dist/umd/index.js',
-    sourcemap: true,
-  },
+  output: [
+    {
+      // Browser/CDN global build (`window.querySelectorShadowDom`)
+      format: 'umd',
+      name: 'querySelectorShadowDom',
+      file: 'dist/umd/index.js',
+      sourcemap: true,
+    },
+    {
+      // CommonJS build for `require()` — `.cjs` so it survives "type": "module"
+      format: 'cjs',
+      file: 'dist/umd/index.cjs',
+      sourcemap: true,
+      exports: 'named',
+    },
+  ],
 };
