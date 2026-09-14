@@ -1,6 +1,6 @@
 {
   "name": "query-selector-shadow-dom-modern",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Modern drop-in replacement for query-selector-shadow-dom — querySelector that pierces Shadow DOM roots without knowing the path",
   "type": "module",
   "main": "dist/umd/index.cjs",
@@ -26,6 +26,8 @@
     "test:watch": "vitest",
     "benchmark": "tsx benchmark/runner.ts",
     "verify": "tsx benchmark/verify.ts",
+    "verify:diff": "tsx benchmark/diff.ts",
+    "verify:page": "tsx benchmark/page.ts",
     "prepublishOnly": "pnpm build"
   },
   "keywords": [
@@ -47,7 +49,7 @@
     "url": "https://github.com/kaixinol/query-selector-shadow-dom-modern/issues"
   },
   "homepage": "https://github.com/kaixinol/query-selector-shadow-dom-modern#readme",
-  "packageManager": "pnpm@11.26.0",
+  "packageManager": "pnpm@12.4.1",
   "devDependencies": {
     "@rollup/plugin-typescript": "^12.1.2",
     "@types/jsdom": "^30.0.0",
