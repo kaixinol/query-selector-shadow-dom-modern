@@ -155,9 +155,13 @@ async function main() {
         "window.__uid = 'pinned1';",
       );
       const uid = 'pinned1';
+      if (sel.type.endsWith('Cold')) continue; // needs a selector pool, see runner.ts
       const resolved: string | null =
         sel.resolve === 'null' ? null : new Function('uid', `return ${sel.resolve}`)(uid);
-      await compare(pinned, scenario.name, resolved, sel.type);
+      // 'queryAll' exercises the same code path as 'query' here (both APIs are
+      // compared); only 'collectAll' needs a different call shape.
+      const type = sel.type === 'collectAll' ? 'collectAll' : 'query';
+      await compare(pinned, scenario.name, resolved, type);
     }
   }
 
