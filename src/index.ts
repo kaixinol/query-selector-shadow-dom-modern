@@ -17,6 +17,11 @@
  *     dynamic pages never see stale data.
  *   - Full combinator support across shadow boundaries: ` `, `>`, `+`, `~`.
  *   - Cross-realm safe (iframe documents): no `instanceof` on DOM classes.
+ *
+ * One upstream bug is fixed: the original re-tests a `>` group at every
+ * ancestor, which silently turns the child combinator into a descendant
+ * combinator. Here `a > b` means "a is b's composed parent", exactly like a
+ * native `querySelector` — just extended across shadow boundaries.
  */
 
 export type QueryableNode = Document | DocumentFragment | Element;
@@ -38,11 +43,20 @@ function isHostedFragment(node: unknown): node is ShadowRoot {
     );
 }
 
-/** `el.matches()` that never throws (context-dependent pseudo-classes etc.). */
-function matchesSelector(el: Element, compound: string): boolean {
+/**
+ * `el.matches()` that never throws (context-dependent pseudo-classes etc.).
+ * When `state` is provided, a rejected selector is recorded so the caller can
+ * re-validate and throw exactly like the original library does.
+ */
+function matchesSelector(
+    el: Element,
+    compound: string,
+    state?: { invalid: boolean },
+): boolean {
     try {
         return el.matches(compound);
     } catch {
+        if (state) state.invalid = true;
         return false;
     }
 }
@@ -55,6 +69,9 @@ function matchesSelector(el: Element, compound: string): boolean {
 function composedParent(el: Element, boundary: QueryableNode): Element | null {
     if (el === boundary) return null;
     const parent = el.parentElement;
+    // The search is scoped to `boundary`: the original library stops there and
+    // never matches the boundary element itself from the inside.
+    if (parent === boundary) return null;
     if (parent) return parent;
     const rootNode = el.getRootNode();
     if (rootNode === el || rootNode === boundary) return null;
@@ -63,80 +80,144 @@ function composedParent(el: Element, boundary: QueryableNode): Element | null {
 }
 
 /**
- * Verify that `el` (already known to match the right-most compound) satisfies
- * the whole selector path, walking the composed tree right-to-left.
- * `tokens` looks like: [compound, combinator, compound, ...].
+ * The right-most compound of the last group — this is the compound the original
+ * library pre-filters candidates with (note that `+` / `~` stay part of it).
  */
-function matchesComposedPath(el: Element, tokens: string[], boundary: QueryableNode): boolean {
-    let node: Element | null = el;
-    let i = tokens.length - 1;
-
-    while (i > 0 && node) {
-        const combinator = tokens[i - 1];
-        const compound = tokens[i - 2];
-
-        if (combinator === '>') {
-            node = composedParent(node, boundary);
-            if (!node || !matchesSelector(node, compound)) return false;
-        } else if (combinator === '+') {
-            node = node.previousElementSibling;
-            if (!node || !matchesSelector(node, compound)) return false;
-        } else if (combinator === '~') {
-            node = node.previousElementSibling;
-            let found = false;
-            while (node) {
-                if (matchesSelector(node, compound)) {
-                    found = true;
-                    break;
-                }
-                node = node.previousElementSibling;
-            }
-            if (!found) return false;
-        } else {
-            // descendant combinator
-            node = composedParent(node, boundary);
-            let found = false;
-            while (node) {
-                if (matchesSelector(node, compound)) {
-                    found = true;
-                    break;
-                }
-                node = composedParent(node, boundary);
-            }
-            if (!found) return false;
-        }
-        i -= 2;
-    }
-    return i <= 0;
+function rightMostCompound(groups: string[][]): string {
+    const last = groups[groups.length - 1];
+    return last[last.length - 1];
 }
+
+/**
+ * Regroup tokenized compounds the way the original library does:
+ *   - `>` keeps compounds in the same group ("a > b" → ["a", "b"])
+ *   - whitespace starts a new group ("a b" → ["a"], ["b"])
+ *   - `+` / `~` stay *inside* a compound and are resolved by native `matches()`
+ */
+function buildGroups(tokens: string[]): string[][] {
+    const groups: string[][] = [];
+    let group: string[] = [];
+    let current = '';
+    const flushCompound = () => {
+        if (current) {
+            group.push(current);
+            current = '';
+        }
+    };
+
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (token === ' ') {
+            flushCompound();
+            if (group.length) groups.push(group);
+            group = [];
+        } else if (token === '>') {
+            flushCompound();
+        } else if (token === '+' || token === '~') {
+            current += token + (tokens[++i] ?? '');
+        } else {
+            current = token;
+        }
+    }
+    flushCompound();
+    if (group.length) groups.push(group);
+    return groups;
+}
+
+/**
+ * Verify that `el` (already known to match the right-most compound) satisfies
+ * the whole selector path.
+ *
+ * A group is a chain of `>`-separated compounds that must match contiguous
+ * composed ancestors; groups are separated from each other by a descendant
+ * combinator, so each one is searched for at the current anchor and above it.
+ * That is what a native `querySelector` would return on the flattened tree.
+ *
+ * The original library instead climbs the composed tree and re-tests the whole
+ * group at every level, which is where its `a > b` degrades into `a b`.
+ */
+function matchesComposedPath(el: Element, groups: string[][], boundary: QueryableNode): boolean {
+    let anchor = matchGroupAt(el, groups[groups.length - 1], boundary);
+    if (!anchor) return false;
+
+    // Groups to the left are joined by a descendant combinator → climb until
+    // one of them matches.
+    let walker = composedParent(anchor, boundary);
+    for (let g = groups.length - 2; g >= 0; g--) {
+        let hit: Element | null = null;
+        let node: Element | null = walker;
+        while (node) {
+            hit = matchGroupAt(node, groups[g], boundary);
+            if (hit) break;
+            node = composedParent(node, boundary);
+        }
+        if (!hit) return false;
+        walker = composedParent(hit, boundary);
+    }
+    return true;
+}
+
+/**
+ * Match a `>`-separated run of compounds with its right-most compound anchored
+ * at `node`. Returns the element the left-most compound matched (the anchor for
+ * whatever sits further to the left), or null when the chain breaks.
+ */
+function matchGroupAt(
+    node: Element,
+    group: string[],
+    boundary: QueryableNode,
+): Element | null {
+    let walker: Element | null = node;
+    for (let k = group.length - 1; k >= 0; k--) {
+        if (!walker || !matchesSelector(walker, group[k])) return null;
+        if (k > 0) walker = composedParent(walker, boundary);
+    }
+    return walker;
+}
+
 
 /**
  * All queryable roots below (and including) `root`: the root itself plus every
  * open shadow root found underneath, in discovery order. Computed fresh on
  * every call — never cached, so dynamic DOMs are always correct.
  */
-function collectRoots(root: QueryableNode): QueryableNode[] {
+interface TreeScan {
+    /** The root itself plus every open shadow root underneath. */
+    roots: QueryableNode[];
+    /** All elements in the original library's composed pre-order (when requested). */
+    elements: Element[];
+}
+
+/**
+ * One walk of the tree that collects both the queryable roots and — when the
+ * caller needs result ordering — every element in composed pre-order. Doing it
+ * in a single pass is what keeps `querySelectorAllDeep` from paying for two
+ * full traversals. Computed fresh on every call, never cached, so dynamic DOMs
+ * are always correct.
+ */
+function collectTree(root: QueryableNode, withElements: boolean): TreeScan {
     const roots: QueryableNode[] = [root];
-    const pending: QueryableNode[] = [];
+    const elements: Element[] = [];
+
+    const walk = (scope: QueryableNode) => {
+        const all = scope.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+            const el = all[i];
+            if (withElements) elements.push(el);
+            const shadowRoot = el.shadowRoot;
+            if (shadowRoot) {
+                roots.push(shadowRoot);
+                walk(shadowRoot);
+            }
+        }
+    };
 
     if (isElementNode(root) && root.shadowRoot) {
         roots.push(root.shadowRoot);
-        pending.push(root.shadowRoot);
+        walk(root.shadowRoot);
     }
-
-    let scope: QueryableNode | undefined = root;
-    while (scope) {
-        const all = scope.querySelectorAll('*');
-        for (let i = 0; i < all.length; i++) {
-            const shadowRoot = (all[i] as Element).shadowRoot;
-            if (shadowRoot) {
-                roots.push(shadowRoot);
-                pending.push(shadowRoot);
-            }
-        }
-        scope = pending.pop();
-    }
-    return roots;
+    walk(root);
+    return { roots, elements };
 }
 
 /**
@@ -145,30 +226,39 @@ function collectRoots(root: QueryableNode): QueryableNode[] {
  * the host element). One native `querySelectorAll('*')` per root — the
  * browser does the walking.
  */
-function collectAllElements(root: QueryableNode, filter?: string): Element[] {
+function collectAllElements(
+    root: QueryableNode,
+    filter?: string,
+    state?: { invalid: boolean },
+): Element[] {
     const out: Element[] = [];
-    collectInto(root, out, filter);
+    // A root element's own shadow content is listed first (original behavior).
+    const ownShadow = (root as Element).shadowRoot;
+    if (ownShadow) collectList(ownShadow.querySelectorAll('*'), out, filter, state);
+    collectList(root.querySelectorAll('*'), out, filter, state);
     return out;
 }
 
-function collectInto(scope: QueryableNode, out: Element[], filter?: string): void {
-    // A root element's own shadow content is listed first (original behavior).
-    if (isElementNode(scope) && scope.shadowRoot) {
-        collectList(scope.shadowRoot.querySelectorAll('*'), out, filter);
+function collectList(
+    list: NodeListOf<Element>,
+    out: Element[],
+    filter?: string,
+    state?: { invalid: boolean },
+): void {
+    if (filter) {
+        for (let i = 0; i < list.length; i++) {
+            const el = list[i];
+            if (matchesSelector(el, filter, state)) out.push(el);
+            const shadowRoot = el.shadowRoot;
+            if (shadowRoot) collectList(shadowRoot.querySelectorAll('*'), out, filter, state);
+        }
+        return;
     }
-    collectList(scope.querySelectorAll('*'), out, filter);
-}
-
-function collectList(list: NodeListOf<Element>, out: Element[], filter?: string): void {
     for (let i = 0; i < list.length; i++) {
         const el = list[i];
-        if (!filter || matchesSelector(el, filter)) {
-            out.push(el);
-        }
+        out.push(el);
         const shadowRoot = el.shadowRoot;
-        if (shadowRoot) {
-            collectList(shadowRoot.querySelectorAll('*'), out, filter);
-        }
+        if (shadowRoot) collectList(shadowRoot.querySelectorAll('*'), out, filter, state);
     }
 }
 
@@ -197,23 +287,41 @@ function* iterateDeep(root: QueryableNode): Generator<Element, void, undefined> 
     }
 }
 
+/** One comma-separated selector part: the raw text plus its [compound, combinator, ...] tokens. */
+interface SelectorPart {
+    raw: string;
+    tokens: string[];
+    /** Compounds regrouped the way the original library matches them. */
+    groups: string[][];
+}
+
+interface ParsedSelector {
+    parts: SelectorPart[];
+    /** Comment-free, trimmed equivalent of the input — used for native queries. */
+    normalized: string;
+}
+
 const PARSE_CACHE_LIMIT = 512;
-const parseCache = new Map<string, string[][]>();
+const parseCache = new Map<string, ParsedSelector>();
 
 /** Split into comma-separated parts, each tokenized as [compound, combinator, ...]. Memoized. */
-function parseSelector(selector: string): string[][] {
+function parseSelector(selector: string): ParsedSelector {
     const cached = parseCache.get(selector);
     if (cached) return cached;
 
-    const parts: string[][] = [];
+    const parts: SelectorPart[] = [];
     for (const part of splitByComma(selector)) {
         const tokens = tokenizePath(part);
-        if (tokens.length > 0) parts.push(tokens);
+        if (tokens.length > 0) parts.push({ raw: part, tokens, groups: buildGroups(tokens) });
     }
+    const parsed: ParsedSelector = {
+        parts,
+        normalized: parts.map((p) => p.raw).join(', '),
+    };
 
     if (parseCache.size >= PARSE_CACHE_LIMIT) parseCache.clear();
-    parseCache.set(selector, parts);
-    return parts;
+    parseCache.set(selector, parsed);
+    return parsed;
 }
 
 /**
@@ -225,17 +333,19 @@ function parseSelector(selector: string): string[][] {
 function collectCandidates<T extends Element>(
     roots: QueryableNode[],
     rightMostCompound: string,
-): { list: T[] | null; set: Set<T> | null; rootsWithHits: number } {
+): { list: T[] | null; set: Set<T> | null; rootsWithHits: number; invalid: boolean } {
     let list: T[] | null = null;
     let set: Set<T> | null = null;
     let rootsWithHits = 0;
+    let invalid = false;
 
     for (const root of roots) {
         let found: NodeListOf<T>;
         try {
             found = root.querySelectorAll<T>(rightMostCompound);
         } catch {
-            continue; // selector not valid in this root's context
+            invalid = true; // selector rejected by the engine — re-checked before returning
+            continue;
         }
         if (found.length === 0) continue;
         rootsWithHits++;
@@ -246,7 +356,27 @@ function collectCandidates<T extends Element>(
             for (let i = 0; i < found.length; i++) set.add(found[i]);
         }
     }
-    return { list, set, rootsWithHits };
+    return { list, set, rootsWithHits, invalid };
+}
+
+/**
+ * The original library always runs a native `root.querySelector(selector)`
+ * first, so an invalid selector throws a SyntaxError instead of silently
+ * returning "not found". We only pay for that check on the rare paths where
+ * the selector looks suspicious (nothing parsed, or rejected by the engine),
+ * which keeps the happy path fast while staying behaviour-compatible.
+ */
+function assertValidSelector(root: QueryableNode, selector: string): void {
+    root.querySelector(selector);
+}
+
+/**
+ * Same idea for the filter of `collectAllElementsDeep`: the original throws
+ * from `Element.matches()`, so re-run a native match to reproduce it.
+ */
+function assertValidFilter(root: QueryableNode, filter: string): void {
+    const probe = root.querySelector('*');
+    if (probe) probe.matches(filter);
 }
 
 /**
@@ -258,42 +388,80 @@ export function querySelectorDeep<T extends Element = HTMLElement>(
     root: QueryableNode = document,
     allElements: Element[] | null = null,
 ): T | null {
-    if (!selector || !selector.trim()) return null;
+    if (selector == null) return null;
+
+    const { parts, normalized } = parseSelector(selector);
 
     // Native fast path — identical to the original library: a plain
     // light-DOM match always wins, no matter what lives in shadow roots.
-    const lightElement = root.querySelector<T>(selector);
+    // (Also makes invalid selectors throw exactly like the original.)
+    const lightElement = root.querySelector<T>(normalized);
     if (lightElement) return lightElement;
 
-    const parts = parseSelector(selector);
-    if (parts.length === 0) return null;
+    if (parts.length === 0) {
+        assertValidSelector(root, normalized);
+        return null;
+    }
 
     // Caller-supplied element list (original API's third argument).
     if (allElements) {
-        for (const tokens of parts) {
-            const last = tokens[tokens.length - 1];
+        let invalid = false;
+        const match = (el: Element, compound: string): boolean => {
+            try {
+                return el.matches(compound);
+            } catch {
+                invalid = true;
+                return false;
+            }
+        };
+        for (const part of parts) {
+            const last = rightMostCompound(part.groups);
+            const single = part.groups.length === 1 && part.groups[0].length === 1;
             for (const el of allElements) {
-                if (
-                    matchesSelector(el, last) &&
-                    (tokens.length === 1 || matchesComposedPath(el, tokens, root))
-                ) {
+                if (match(el, last) && (single || matchesComposedPath(el, part.groups, root))) {
                     return el as T;
                 }
             }
         }
+        if (invalid) assertValidSelector(root, normalized);
         return null;
     }
 
-    const roots = collectRoots(root);
-    if (roots.length === 1) return null; // no shadow roots; native query already failed
+    const { roots, elements } = collectTree(root, true);
+    // Without shadow roots the native query above is authoritative: `>` is
+    // matched exactly the way the engine matches it (see matchesComposedPath),
+    // so there is nothing left to find.
+    if (roots.length === 1) return null;
 
-    for (const tokens of parts) {
-        const last = tokens[tokens.length - 1];
-        const { list, set, rootsWithHits } = collectCandidates<T>(roots, last);
+    // Few roots + many elements → let the browser pre-filter with one native
+    // query per root. Many tiny roots → a single scan in composed order is
+    // cheaper than the per-query overhead (and it can stop at the first hit).
+    const nativePerRoot = roots.length * 4 <= elements.length;
+    const state = { invalid: false };
+
+    for (const part of parts) {
+        const last = rightMostCompound(part.groups);
+        const single = part.groups.length === 1 && part.groups[0].length === 1;
+
+        if (!nativePerRoot) {
+            if (elements.length === 0) {
+                assertValidSelector(root, normalized);
+                continue;
+            }
+            for (let i = 0; i < elements.length; i++) {
+                const el = elements[i] as T;
+                if (!matchesSelector(el, last, state)) continue;
+                if (single || matchesComposedPath(el, part.groups, root)) return el;
+            }
+            continue;
+        }
+
+        const { list, set, rootsWithHits, invalid } = collectCandidates<T>(roots, last);
+        if (invalid) state.invalid = true;
         if (!list) continue;
 
         const verified = (el: T): boolean =>
-            tokens.length === 1 || matchesComposedPath(el, tokens, root);
+            single || matchesComposedPath(el, part.groups, root);
 
         if (rootsWithHits === 1) {
             // All candidates live in a single root → that root's native order is composed order.
@@ -307,6 +475,7 @@ export function querySelectorDeep<T extends Element = HTMLElement>(
             }
         }
     }
+    if (state.invalid) assertValidSelector(root, normalized);
     return null;
 }
 
@@ -320,48 +489,103 @@ export function querySelectorAllDeep<T extends Element = HTMLElement>(
     root: QueryableNode = document,
     allElements: Element[] | null = null,
 ): T[] {
-    if (!selector || !selector.trim()) return [];
+    if (selector == null) return [];
 
-    const parts = parseSelector(selector);
-    if (parts.length === 0) return [];
+    const { parts, normalized } = parseSelector(selector);
+    if (parts.length === 0) {
+        assertValidSelector(root, normalized);
+        return [];
+    }
 
     // Caller-supplied element list (original API's third argument).
     if (allElements) {
         const out: T[] = [];
         const seen = new Set<Element>();
-        for (const tokens of parts) {
-            const last = tokens[tokens.length - 1];
+        let invalid = false;
+        const match = (el: Element, compound: string): boolean => {
+            try {
+                return el.matches(compound);
+            } catch {
+                invalid = true;
+                return false;
+            }
+        };
+        for (const part of parts) {
+            const last = rightMostCompound(part.groups);
+            const single = part.groups.length === 1 && part.groups[0].length === 1;
             for (const el of allElements) {
-                if (seen.has(el) || !matchesSelector(el, last)) continue;
-                if (tokens.length === 1 || matchesComposedPath(el, tokens, root)) {
+                if (seen.has(el) || !match(el, last)) continue;
+                if (single || matchesComposedPath(el, part.groups, root)) {
                     seen.add(el);
                     out.push(el as T);
                 }
             }
         }
+        if (invalid) assertValidSelector(root, normalized);
         return out;
     }
 
-    const roots = collectRoots(root);
+    const { roots, elements } = collectTree(root, true);
 
-    // No shadow roots below `root` → hand everything to the browser.
-    if (roots.length === 1) {
-        return Array.from(root.querySelectorAll<T>(selector));
+    // No shadow roots below `root` → hand everything to the browser, one comma
+    // part at a time so results keep the original's per-part grouping (and an
+    // invalid part still throws). Only safe for non-element roots: the original
+    // never matches the boundary element itself, while a native query on an
+    // element root does (e.g. `querySelectorAllDeep('div > span', divRoot)`).
+    if (roots.length === 1 && !isElementNode(root)) {
+        const out: T[] = [];
+        const seen = new Set<T>();
+        for (const part of parts) {
+            for (const el of root.querySelectorAll<T>(part.raw)) {
+                if (seen.has(el)) continue;
+                seen.add(el);
+                out.push(el);
+            }
+        }
+        return out;
     }
 
     const results: T[] = [];
     const seen = new Set<T>();
+    const state = { invalid: false };
+    // Two ways to find the candidates for a comma part:
+    //   - one native query per root: cheap when there are few roots and many
+    //     elements (the browser does the filtering);
+    //   - a single JS pass over the composed element list: cheaper when there
+    //     are many tiny roots, where per-query overhead would dominate.
+    const nativePerRoot = roots.length * 4 <= elements.length;
 
-    for (const tokens of parts) {
-        const last = tokens[tokens.length - 1];
-        const { list, set, rootsWithHits } = collectCandidates<T>(roots, last);
+    for (const part of parts) {
+        const last = rightMostCompound(part.groups);
+        const single = part.groups.length === 1 && part.groups[0].length === 1;
+
+        if (!nativePerRoot) {
+            if (elements.length === 0) {
+                // Nothing to match against, so an invalid selector would slip
+                // through unnoticed — validate it the way the original does.
+                assertValidSelector(root, normalized);
+                continue;
+            }
+            for (let i = 0; i < elements.length; i++) {
+                const el = elements[i] as T;
+                if (seen.has(el) || !matchesSelector(el, last, state)) continue;
+                if (single || matchesComposedPath(el, part.groups, root)) {
+                    seen.add(el);
+                    results.push(el);
+                }
+            }
+            continue;
+        }
+
+        const { list, set, rootsWithHits, invalid } = collectCandidates<T>(roots, last);
+        if (invalid) state.invalid = true;
         if (!list) continue;
 
         if (rootsWithHits === 1) {
-            // All candidates live in a single root → its native order is composed order.
+            // All candidates live in a single root → that root's native order is composed order.
             for (const el of list) {
                 if (seen.has(el)) continue;
-                if (tokens.length === 1 || matchesComposedPath(el, tokens, root)) {
+                if (single || matchesComposedPath(el, part.groups, root)) {
                     seen.add(el);
                     results.push(el);
                 }
@@ -369,17 +593,17 @@ export function querySelectorAllDeep<T extends Element = HTMLElement>(
         } else {
             // Candidates spread across roots → merge in composed tree order.
             const candidates = set ?? new Set(list);
-            const all = collectAllElements(root);
-            for (let i = 0; i < all.length; i++) {
-                const el = all[i] as T;
+            for (let i = 0; i < elements.length; i++) {
+                const el = elements[i] as T;
                 if (!candidates.has(el) || seen.has(el)) continue;
-                if (tokens.length === 1 || matchesComposedPath(el, tokens, root)) {
+                if (single || matchesComposedPath(el, part.groups, root)) {
                     seen.add(el);
                     results.push(el);
                 }
             }
         }
     }
+    if (state.invalid) assertValidSelector(root, normalized);
     return results;
 }
 
@@ -393,13 +617,32 @@ export function collectAllElementsDeep<T extends Element = HTMLElement>(
     root: QueryableNode = document,
     cachedElements: Element[] | null = null,
 ): T[] {
+    // The original only checks `selector ? ... : ...` (it never trims here), so
+    // an empty string means "no filter" while a blank one is handed to
+    // `matches()` and throws — bug-for-bug compatible.
+    const filter = selector ? selector : undefined;
+
     if (cachedElements) {
         const all = cachedElements as T[];
-        return selector ? all.filter((el) => matchesSelector(el, selector)) : all;
+        if (!filter) return all;
+        let invalid = false;
+        const out = all.filter((el) => {
+            try {
+                return el.matches(filter);
+            } catch {
+                invalid = true;
+                return false;
+            }
+        });
+        if (invalid) assertValidFilter(cachedElements[0], filter);
+        return out;
     }
 
     // Single pass: elements are filtered while the tree is being walked.
-    return collectAllElements(root, selector ?? undefined) as T[];
+    const state = { invalid: false };
+    const out = collectAllElements(root, filter, state) as T[];
+    if (state.invalid && filter) assertValidFilter(root, filter);
+    return out;
 }
 
 /**
@@ -445,6 +688,15 @@ export function splitByComma(selector: string): string[] {
         }
 
         if (!inSingleQuote && !inDoubleQuote) {
+            // CSS comments are stripped by the original library's normalizer —
+            // replace them with a space so commas inside a comment never split
+            // a part and the raw part stays valid for native queries.
+            if (char === '/' && selector[i + 1] === '*') {
+                const end = selector.indexOf('*/', i + 2);
+                i = end === -1 ? selector.length : end + 1;
+                current += ' ';
+                continue;
+            }
             if (char === '(') parenDepth++;
             else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
             else if (char === '[') bracketDepth++;
@@ -489,6 +741,32 @@ export function tokenizePath(selector: string): string[] {
         current = '';
     };
 
+    // Emit the implicit descendant combinator when two compounds are separated
+    // by whitespace and/or a CSS comment (the original library normalizes
+    // comments to whitespace before parsing).
+    const pushDescendantIfNeeded = (nextIndex: number) => {
+        let nextChar = '';
+        for (let j = nextIndex; j < selector.length; j++) {
+            if (!/\s/.test(selector[j])) {
+                nextChar = selector[j];
+                break;
+            }
+        }
+        const lastToken = tokens[tokens.length - 1];
+        const isLastCombinator =
+            lastToken === ' ' || lastToken === '>' || lastToken === '+' || lastToken === '~';
+        if (
+            tokens.length > 0 &&
+            !isLastCombinator &&
+            nextChar &&
+            nextChar !== '>' &&
+            nextChar !== '+' &&
+            nextChar !== '~'
+        ) {
+            tokens.push(' ');
+        }
+    };
+
     for (let i = 0; i < selector.length; i++) {
         const char = selector[i];
 
@@ -517,6 +795,15 @@ export function tokenizePath(selector: string): string[] {
         }
 
         if (!inSingleQuote && !inDoubleQuote) {
+            // A CSS comment acts as whitespace (original: normalizeSelector).
+            if (char === '/' && selector[i + 1] === '*') {
+                pushCurrent();
+                const end = selector.indexOf('*/', i + 2);
+                i = end === -1 ? selector.length : end + 1;
+                pushDescendantIfNeeded(i + 1);
+                continue;
+            }
+
             if (char === '(') parenDepth++;
             else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
             else if (char === '[') bracketDepth++;
@@ -531,33 +818,10 @@ export function tokenizePath(selector: string): string[] {
 
                 if (/\s/.test(char)) {
                     pushCurrent();
-
                     while (i + 1 < selector.length && /\s/.test(selector[i + 1])) {
                         i++;
                     }
-
-                    let nextChar = '';
-                    for (let j = i + 1; j < selector.length; j++) {
-                        if (!/\s/.test(selector[j])) {
-                            nextChar = selector[j];
-                            break;
-                        }
-                    }
-
-                    const lastToken = tokens[tokens.length - 1];
-                    const isLastCombinator =
-                        lastToken === ' ' || lastToken === '>' || lastToken === '+' || lastToken === '~';
-
-                    if (
-                        tokens.length > 0 &&
-                        !isLastCombinator &&
-                        nextChar &&
-                        nextChar !== '>' &&
-                        nextChar !== '+' &&
-                        nextChar !== '~'
-                    ) {
-                        tokens.push(' ');
-                    }
+                    pushDescendantIfNeeded(i + 1);
                     continue;
                 }
             }
